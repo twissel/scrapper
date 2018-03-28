@@ -1,0 +1,11 @@
+[package]
+name = "scrapper_v2"
+version = "0.1.0"
+authors = ["twissel <twissel@gmail.com>"]
+
+[dependencies]
+reqwest = {version = "0.8.5", features = ["unstable"]}
+futures = {version = "0.1.18"}
+tokio-core = {version = "0.1.15"}
+url = "1.7.0"
+ex-futures = "0.4.9"
