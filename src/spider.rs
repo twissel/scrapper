@@ -12,9 +12,9 @@ pub type ResponseStream = Box<Stream<Item = Response, Error = ()>>;
 pub type ParseStream<T> = Box<Stream<Item = Parse<T>, Error = ()>>;
 pub type ItemStream<T> = Box<Stream<Item = T, Error = ()>>;
 
-pub trait Spider: Send + Sync + 'static
+pub trait Spider
 where
-    Self::Item: Send + Sized,
+    Self::Item: Send + Sized + 'static,
 {
     type Item;
 

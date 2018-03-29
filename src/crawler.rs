@@ -32,6 +32,7 @@ impl Sheduler {
         let current_queque = self.queque.take();
         match current_queque {
             Some(queque) => {
+                let queque = queque.into_inner();
                 let new_queue = (Box::new(queque.chain(requests)) as RequestStream).fuse();
                 self.queque = Some(new_queue);
             }

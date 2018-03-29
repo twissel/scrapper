@@ -9,3 +9,4 @@ futures = {version = "0.1.18"}
 tokio-core = {version = "0.1.15"}
 url = "1.7.0"
 ex-futures = "0.4.9"
+select = "0.4.2"
