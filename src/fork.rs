@@ -4,9 +4,7 @@ use std::collections::hash_map::Entry;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::hash::Hash;
-use select_all::SelectAll;
 use futures::task;
-use std::fmt::Debug;
 use std::cell::{Ref, RefMut};
 
 #[derive(Clone, Eq, PartialEq, Hash)]

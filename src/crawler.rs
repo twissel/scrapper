@@ -1,11 +1,11 @@
+use eos_on_error::EosOnErrorExt;
 use ex_futures::stream::StreamExt;
+use failure::Error;
 use futures::stream::FuturesUnordered;
-use futures::task;
 use futures::{Async, Future, Poll, Stream};
 use select_all::SelectAll;
-use spider::*;
 use sheduler::*;
-use failure::Error;
+use spider::*;
 
 pub struct Crawler<SH>
 where
@@ -40,6 +40,15 @@ where
         }
 
         while let Async::Ready(Some(parsed)) = self.parsing.poll()? {
+            let parsed = parsed.eos_on_error().filter_map(|item| {
+                match item {
+                    Ok(item) => Some(item),
+                    Err(_) => {
+                        // TODO: log errors
+                        None
+                    }
+                }
+            });
             let (new_requests, new_items) = parsed.unsync_fork(|item| match item {
                 &Parse::Request(_) => true,
                 _ => false,
@@ -79,7 +88,21 @@ where
     where
         S: Spider,
     {
-        let start_stream: RequestStream = Box::new(spider.start().flatten_stream());
+        let start_stream = spider
+            .start()
+            .map_err(|e| {
+                let err: Error = e.into();
+                err
+            })
+            .map(|stream| {
+                stream.map_err(|e| {
+                    let err: Error = e.into();
+                    err
+                })
+            });
+
+        let start_stream: InternalRequestStream =
+            Box::new(start_stream.flatten_stream().eos_on_error());
         let parsing = FuturesUnordered::new();
         let output = SelectAll::new();
         let mut sheduler = self.sheduler;

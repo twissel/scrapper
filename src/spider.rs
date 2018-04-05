@@ -1,27 +1,28 @@
+use failure::{Error, Fail};
 use futures::Future;
 use futures::stream::Stream;
 use reqwest::unstable::async::{Request, Response};
-use failure::Fail;
 
 pub enum Parse<T> {
     Request(Request),
     Item(T),
 }
 
-pub type RequestStream = Box<Stream<Item = Request, Error = Fail>>;
-pub type ResponseStream = Box<Stream<Item = Response, Error = Fail>>;
-pub type ParseStream<T> = Box<Stream<Item = Parse<T>, Error = Fail>>;
-pub type ItemStream<T> = Box<Stream<Item = T, Error = Fail>>;
+pub type RequestStream = Box<Stream<Item = Request, Error = Error>>;
+pub type ResponseStream = Box<Stream<Item = Response, Error = Error>>;
+pub type ParseStream<T> = Box<Stream<Item = Result<Parse<T>, Error>, Error = Error>>;
+pub type ItemStream<T> = Box<Stream<Item = T, Error = !>>;
+pub type InternalRequestStream = Box<Stream<Item = Request, Error = !>>;
 
 pub trait Spider
 where
-    Self::Item: Send + Sized + 'static,
+    Self::Item: Sized + 'static,
 {
     type Item;
 
-    fn start(&mut self) -> Box<Future<Item = RequestStream, Error = Fail>>;
+    fn start(&mut self) -> Box<Future<Item = RequestStream, Error = Error>>;
     fn parse(
         &mut self,
         response: Response,
-    ) -> Box<Future<Item = ParseStream<Self::Item>, Error = Fail>>;
+    ) -> Box<Future<Item = ParseStream<Self::Item>, Error = Error>>;
 }
