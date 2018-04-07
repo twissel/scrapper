@@ -43,7 +43,7 @@ where
         }
 
         if let Async::Ready(Some(parsed)) = self.parsing.poll()? {
-            let parsed = filter_and_log_errors(parsed, &self.logger).eos_on_error();
+            let parsed = filter_and_log_errors(parsed, &self.logger).eos_on_error(&self.logger);
             let (new_requests, new_items) = parsed.unsync_fork(|item| match item {
                 &Parse::Request(_) => true,
                 _ => false,
@@ -63,7 +63,7 @@ where
                 Some(ref logger) => {
                     let log = logger.clone();
                     let inspect = new_items
-                        .inspect(move |item| info!(log, "new item received:"; "item" => %item));
+                        .inspect(move |item| info!(log, "new item received"; "item" => %item));
                     Box::new(inspect) as ItemStream<Self::Item>
                 }
                 None => Box::new(new_items) as ItemStream<Self::Item>,
@@ -94,7 +94,8 @@ where
         S: Spider,
     {
         let start_stream = spider.start().flatten_stream();
-        let start_stream = filter_and_log_errors(start_stream, &self.logger).eos_on_error();
+        let start_stream =
+            filter_and_log_errors(start_stream, &self.logger).eos_on_error(&self.logger);
 
         let start_stream: InternalRequestStream = Box::new(start_stream);
         let parsing = FuturesUnordered::new();
@@ -147,14 +148,9 @@ where
             Box::new(stream) as Box<Stream<Item = T, Error = SE>>
         }
         &None => {
-            let stream = stream.filter_map(|item| {
-                match item {
-                    Ok(req) => Some(req),
-                    Err(_) => {
-                        // TODO: log errors
-                        None
-                    }
-                }
+            let stream = stream.filter_map(|item| match item {
+                Ok(req) => Some(req),
+                Err(_) => None,
             });
             Box::new(stream)
         }

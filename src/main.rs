@@ -136,7 +136,7 @@ impl<'a> spider::Spider for XnxxSpider<'a> {
     }
 
     fn start(&mut self) -> Box<Future<Item = spider::RequestStream, Error = Error>> {
-        let url: Result<Url, ParseError> = "http://www.xnxx.com/tags".parse();
+        let url: Result<Url, ParseError> = "http://nono123313.com".parse();
         match url {
             Ok(url) => {
                 let req = Request::new(Method::Get, url.clone());

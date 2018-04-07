@@ -1,8 +1,10 @@
 use futures::{Async, Poll, Stream};
+use slog::Logger;
 use std::mem::replace;
 
 pub(crate) struct EosOnError<S> {
     state: State<S>,
+    logger: Option<Logger>,
 }
 
 enum State<S> {
@@ -12,13 +14,21 @@ enum State<S> {
 }
 
 impl<S> EosOnError<S> {
-    pub fn new(stream: S) -> Self {
+    pub fn new(stream: S, logger: &Option<Logger>) -> Self {
         let state = State::Working(stream);
-        Self { state }
+        let logger = match logger {
+            &Some(ref logger) => Some(logger.clone()),
+            &None => None,
+        };
+        Self { state, logger }
     }
 }
 
-impl<S: Stream> Stream for EosOnError<S> {
+impl<S> Stream for EosOnError<S>
+where
+    S: Stream,
+    S::Error: ::fmt::Display,
+{
     type Item = S::Item;
     type Error = !;
 
@@ -35,6 +45,9 @@ impl<S: Stream> Stream for EosOnError<S> {
                     match poll {
                         Err(e) => {
                             self.state = State::Terminated;
+                            if let Some(ref logger) = self.logger {
+                                error!(logger, "error received"; "error" => %e);
+                            }
                         }
                         Ok(Async::NotReady) => {
                             self.state = State::Working(stream);
@@ -54,14 +67,14 @@ impl<S: Stream> Stream for EosOnError<S> {
 }
 
 pub(crate) trait EosOnErrorExt: Stream + Sized {
-    fn eos_on_error(self) -> EosOnError<Self>;
+    fn eos_on_error(self, logger: &Option<Logger>) -> EosOnError<Self>;
 }
 
 impl<S> EosOnErrorExt for S
 where
     S: Stream + Sized,
 {
-    fn eos_on_error(self) -> EosOnError<Self> {
-        EosOnError::new(self)
+    fn eos_on_error(self, logger: &Option<Logger>) -> EosOnError<Self> {
+        EosOnError::new(self, logger)
     }
 }
