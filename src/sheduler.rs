@@ -104,24 +104,31 @@ impl<'a> Stream for GlobalLimitedSheduler<'a> {
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        // nothing fancy here, just copy paste from BufferUnordered
-        while self.executing.len() < self.limit as usize {
-            let req = match self.stream.poll()? {
-                Async::Ready(Some(s)) => s,
-                Async::Ready(None) | Async::NotReady => break,
-            };
-            let fut = self.client.execute(req).map_err(|e| e.into());
-            self.executing.push(Box::new(fut));
-        }
+        loop {
+            // nothing fancy here, just copy paste from BufferUnordered
+            while self.executing.len() < self.limit as usize {
+                let req = match self.stream.poll()? {
+                    Async::Ready(Some(s)) => s,
+                    Async::Ready(None) | Async::NotReady => break,
+                };
+                let fut = self.client.execute(req).map_err(|e| e.into());
+                self.executing.push(Box::new(fut));
+            }
 
-        if let Some(resp) = try_ready!(self.executing.poll()) {
-            return Ok(Async::Ready(Some(resp)));
-        }
-
-        if self.stream.as_ref().is_done() {
-            Ok(Async::Ready(None))
-        } else {
-            Ok(Async::NotReady)
+            match self.executing.poll() {
+                Err(e) => {
+                    println!("{:?}", e);
+                }
+                Ok(Async::NotReady) => return Ok(Async::NotReady),
+                Ok(Async::Ready(Some(resp))) => return Ok(Async::Ready(Some(resp))),
+                Ok(Async::Ready(None)) => {
+                    if self.stream.as_ref().is_done() {
+                        return Ok(Async::Ready(None));
+                    } else {
+                        return Ok(Async::NotReady);
+                    }
+                }
+            }
         }
     }
 }

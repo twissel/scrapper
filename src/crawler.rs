@@ -33,22 +33,23 @@ where
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        // try to parse  as much responses, as we can.
-        while let Async::Ready(Some(resp)) = self.sheduler.poll()? {
+        if let Async::Ready(Some(resp)) = self.sheduler.poll()? {
             let parse_fut = self.spider.parse(resp);
             self.parsing.push(Box::new(parse_fut));
         }
 
-        while let Async::Ready(Some(parsed)) = self.parsing.poll()? {
-            let parsed = parsed.eos_on_error().filter_map(|item| {
-                match item {
-                    Ok(item) => Some(item),
-                    Err(_) => {
-                        // TODO: log errors
-                        None
+        if let Async::Ready(Some(parsed)) = self.parsing.poll()? {
+            let parsed = parsed
+                .filter_map(|item| {
+                    match item {
+                        Ok(item) => Some(item),
+                        Err(_) => {
+                            // TODO: log errors
+                            None
+                        }
                     }
-                }
-            });
+                })
+                .eos_on_error();
             let (new_requests, new_items) = parsed.unsync_fork(|item| match item {
                 &Parse::Request(_) => true,
                 _ => false,
@@ -90,19 +91,19 @@ where
     {
         let start_stream = spider
             .start()
-            .map_err(|e| {
-                let err: Error = e.into();
-                err
+            .flatten_stream()
+            .filter_map(|item| {
+                match item {
+                    Ok(req) => Some(req),
+                    Err(_) => {
+                        // TODO: log errors
+                        None
+                    }
+                }
             })
-            .map(|stream| {
-                stream.map_err(|e| {
-                    let err: Error = e.into();
-                    err
-                })
-            });
+            .eos_on_error();
 
-        let start_stream: InternalRequestStream =
-            Box::new(start_stream.flatten_stream().eos_on_error());
+        let start_stream: InternalRequestStream = Box::new(start_stream);
         let parsing = FuturesUnordered::new();
         let output = SelectAll::new();
         let mut sheduler = self.sheduler;

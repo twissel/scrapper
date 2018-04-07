@@ -8,7 +8,7 @@ pub enum Parse<T> {
     Item(T),
 }
 
-pub type RequestStream = Box<Stream<Item = Request, Error = Error>>;
+pub type RequestStream = Box<Stream<Item = Result<Request, Error>, Error = Error>>;
 pub type ResponseStream = Box<Stream<Item = Response, Error = Error>>;
 pub type ParseStream<T> = Box<Stream<Item = Result<Parse<T>, Error>, Error = Error>>;
 pub type ItemStream<T> = Box<Stream<Item = T, Error = !>>;
