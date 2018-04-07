@@ -12,6 +12,10 @@ extern crate url;
 extern crate failure_derive;
 extern crate tendril;
 
+#[macro_use]
+extern crate slog;
+extern crate sloggers;
+
 mod crawler;
 mod eos_on_error;
 mod fork;
@@ -30,8 +34,11 @@ use reqwest::Method;
 use reqwest::unstable::async::{Client, Request, Response};
 use select::document::Document;
 use select::predicate::{Attr, Class, Name, Predicate};
+use sloggers::Build;
+use sloggers::terminal::{Destination, TerminalLoggerBuilder};
+use sloggers::types::Severity;
 use spider::Parse;
-use std::fmt;
+use std::fmt::{self, Display};
 use std::sync::Arc;
 use tendril::StrTendril;
 use url::{ParseError, Url};
@@ -42,10 +49,16 @@ struct Dummy;
 #[derive(Debug)]
 struct DummyItem;
 
+impl fmt::Display for DummyItem {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Dummy Item")
+    }
+}
+
 #[derive(Debug, Fail, Clone)]
 struct DummyError;
 
-impl fmt::Display for DummyError {
+impl Display for DummyError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "An error occurred.")
     }
@@ -53,6 +66,10 @@ impl fmt::Display for DummyError {
 
 impl spider::Spider for Dummy {
     type Item = DummyItem;
+
+    fn name(&self) -> &'static str {
+        "DummySpider"
+    }
 
     fn start(&mut self) -> Box<Future<Item = spider::RequestStream, Error = Error>> {
         let url = "https://google.com".parse().map_err(|e: ParseError| {
@@ -93,6 +110,12 @@ pub struct XnxxItem {
     url: Url,
 }
 
+impl fmt::Display for XnxxItem {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "XnxxItem(Url({}))", self.url)
+    }
+}
+
 pub struct XnxxSpider<'a> {
     client: &'a Client,
     num_parsed: usize,
@@ -107,6 +130,10 @@ impl<'a> XnxxSpider<'a> {
 
 impl<'a> spider::Spider for XnxxSpider<'a> {
     type Item = XnxxItem;
+
+    fn name(&self) -> &'static str {
+        "XnxxSpider"
+    }
 
     fn start(&mut self) -> Box<Future<Item = spider::RequestStream, Error = Error>> {
         let url: Result<Url, ParseError> = "http://www.xnxx.com/tags".parse();
@@ -178,14 +205,16 @@ impl<'a> spider::Spider for XnxxSpider<'a> {
 fn main() {
     let mut core = tokio_core::reactor::Core::new().unwrap();
     let client = Client::new(&core.handle());
-    let sheduler = sheduler::GlobalLimitedSheduler::new(&client, 300);
-    let crawler = Crawler::new(sheduler);
+    let mut builder = TerminalLoggerBuilder::new();
+    builder.level(Severity::Debug);
+    builder.destination(Destination::Stderr);
+    let logger = builder.build().unwrap();
+
+    let sheduler = sheduler::GlobalLimitedSheduler::with_logger(&client, 300, logger.clone());
+    let crawler = Crawler::with_logger(sheduler, logger);
     let spider = XnxxSpider::new(&client);
     let crawl = crawler.crawl(spider);
-    let crawl = crawl.for_each(|item| {
-        println!("{:?}", item);
-        Ok(())
-    });
+    let crawl = crawl.for_each(|item| Ok(()));
 
     let res = core.run(crawl);
     println!("{:?}", res);

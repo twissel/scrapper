@@ -2,6 +2,7 @@ use failure::{Error, Fail};
 use futures::Future;
 use futures::stream::Stream;
 use reqwest::unstable::async::{Request, Response};
+use std::fmt::Display;
 
 pub enum Parse<T> {
     Request(Request),
@@ -16,9 +17,11 @@ pub type InternalRequestStream = Box<Stream<Item = Request, Error = !>>;
 
 pub trait Spider
 where
-    Self::Item: Sized + 'static,
+    Self::Item: Sized + Display + 'static,
 {
     type Item;
+
+    fn name(&self) -> &'static str;
 
     fn start(&mut self) -> Box<Future<Item = RequestStream, Error = Error>>;
     fn parse(

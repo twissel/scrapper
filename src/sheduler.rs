@@ -8,6 +8,7 @@ use spider::InternalRequestStream;
 use spider::RequestStream;
 use std::collections::VecDeque;
 use std::convert::From;
+use slog::Logger;
 
 pub trait Sheduler: Stream<Error = Error, Item = Response> {
     fn shedule(&mut self, requests: InternalRequestStream);
@@ -73,18 +74,33 @@ pub struct GlobalLimitedSheduler<'a> {
     client: &'a Client,
     limit: u64,
     executing: FuturesUnordered<Box<Future<Item = Response, Error = Error>>>,
+    logger: Option<Logger>
 }
 
 impl<'a> GlobalLimitedSheduler<'a> {
     pub fn new(client: &'a Client, limit: u64) -> Self {
         let executing = FuturesUnordered::new();
         let stream = (Box::new(empty()) as InternalRequestStream).into();
-
+        let logger = None;
         Self {
             client,
             stream,
             limit,
             executing,
+            logger
+        }
+    }
+
+    pub fn with_logger(client: &'a Client, limit: u64, logger: Logger) -> Self {
+        let executing = FuturesUnordered::new();
+        let stream = (Box::new(empty()) as InternalRequestStream).into();
+        let logger = Some(logger);
+        Self {
+            client,
+            stream,
+            limit,
+            executing,
+            logger
         }
     }
 }
@@ -117,7 +133,9 @@ impl<'a> Stream for GlobalLimitedSheduler<'a> {
 
             match self.executing.poll() {
                 Err(e) => {
-                    println!("{:?}", e);
+                    if let Some(ref logger) = self.logger {
+                        error!(logger, "request failed"; "error" => %e);
+                    }
                 }
                 Ok(Async::NotReady) => return Ok(Async::NotReady),
                 Ok(Async::Ready(Some(resp))) => return Ok(Async::Ready(Some(resp))),
