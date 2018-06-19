@@ -1,14 +1,12 @@
 use failure::Error;
-use fork::{Prong, Route};
 use futures::stream::{empty, Fuse, FuturesUnordered, Stream};
 use futures::task::{current, Task};
 use futures::{Async, Future, Poll};
-use reqwest::unstable::async::{Client, Request, Response};
-use spider::InternalRequestStream;
-use spider::RequestStream;
-use std::collections::VecDeque;
-use std::convert::From;
+use request::Request;
+use reqwest::unstable::async::{Client, Response};
 use slog::Logger;
+use spider::InternalRequestStream;
+use std::convert::From;
 
 pub trait Sheduler: Stream<Error = Error, Item = Response> {
     fn shedule(&mut self, requests: InternalRequestStream);
@@ -74,9 +72,10 @@ pub struct GlobalLimitedSheduler<'a> {
     client: &'a Client,
     limit: u64,
     executing: FuturesUnordered<Box<Future<Item = Response, Error = Error>>>,
-    logger: Option<Logger>
+    logger: Option<Logger>,
 }
 
+#[allow(dead_code)]
 impl<'a> GlobalLimitedSheduler<'a> {
     pub fn new(client: &'a Client, limit: u64) -> Self {
         let executing = FuturesUnordered::new();
@@ -87,7 +86,7 @@ impl<'a> GlobalLimitedSheduler<'a> {
             stream,
             limit,
             executing,
-            logger
+            logger,
         }
     }
 
@@ -100,7 +99,7 @@ impl<'a> GlobalLimitedSheduler<'a> {
             stream,
             limit,
             executing,
-            logger
+            logger,
         }
     }
 }
@@ -127,7 +126,7 @@ impl<'a> Stream for GlobalLimitedSheduler<'a> {
                     Async::Ready(Some(s)) => s,
                     Async::Ready(None) | Async::NotReady => break,
                 };
-                let fut = self.client.execute(req).map_err(|e| e.into());
+                let fut = self.client.execute(req.into()).map_err(|e| e.into());
                 self.executing.push(Box::new(fut));
             }
 

@@ -60,7 +60,7 @@ where
                         }
                     }
                 }
-                State::Temp => unreachable!("NoneError State::Temp reached"),
+                State::Temp => unreachable!("EosOnError State::Temp reached"),
             }
         }
     }

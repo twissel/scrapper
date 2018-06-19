@@ -1,23 +1,23 @@
-use failure::{Error, Fail};
-use futures::Future;
+use failure::Error;
 use futures::stream::Stream;
-use reqwest::unstable::async::{Request, Response};
+use futures::Future;
+use request::Request;
+use reqwest::unstable::async::Response;
 use std::fmt::Display;
 
-pub enum Parse<T> {
+pub enum Parse<T: Send> {
     Request(Request),
     Item(T),
 }
 
 pub type RequestStream = Box<Stream<Item = Result<Request, Error>, Error = Error>>;
-pub type ResponseStream = Box<Stream<Item = Response, Error = Error>>;
-pub type ParseStream<T> = Box<Stream<Item = Result<Parse<T>, Error>, Error = Error>>;
+pub type ParseStream<T> = Box<Stream<Item = Result<Parse<T>, Error>, Error = Error> + Send>;
 pub type ItemStream<T> = Box<Stream<Item = T, Error = !>>;
 pub type InternalRequestStream = Box<Stream<Item = Request, Error = !>>;
 
 pub trait Spider
 where
-    Self::Item: Sized + Display + 'static,
+    Self::Item: Sized + Display + Send + 'static,
 {
     type Item;
 
@@ -27,5 +27,5 @@ where
     fn parse(
         &mut self,
         response: Response,
-    ) -> Box<Future<Item = ParseStream<Self::Item>, Error = Error>>;
+    ) -> Box<Future<Item = ParseStream<Self::Item>, Error = Error> + Send>;
 }

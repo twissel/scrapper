@@ -29,6 +29,7 @@ impl<T: Debug> Debug for SelectAll<T> {
     }
 }
 
+#[allow(dead_code)]
 impl<S: Stream> SelectAll<S> {
     /// Constructs a new, empty `SelectAll`
     ///

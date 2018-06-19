@@ -5,7 +5,8 @@ authors = ["twissel <twissel@gmail.com>"]
 
 [dependencies]
 reqwest = {version = "0.8.5", features = ["unstable"]}
-futures = {version = "0.1.18"}
+futures = {version = "0.1.21"}
+futures-cpupool = "0.1.8"
 tokio-core = {version = "0.1.15"}
 url = "1.7.0"
 ex-futures = "0.4.9"
@@ -15,3 +16,5 @@ failure_derive = "0.1.1"
 tendril = "*"
 slog = "2.2.3"
 sloggers = "0.2.6"
+bytes = "0.4.6"
+sha1 = "0.6.0"

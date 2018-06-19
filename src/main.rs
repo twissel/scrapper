@@ -1,46 +1,49 @@
 #![feature(never_type)]
+#![feature(conservative_impl_trait)]
 
 extern crate ex_futures;
 #[macro_use]
 extern crate futures;
 extern crate failure;
+extern crate futures_cpupool;
 extern crate reqwest;
 extern crate select;
+extern crate sha1;
 extern crate tokio_core;
 extern crate url;
 #[macro_use]
 extern crate failure_derive;
-extern crate tendril;
 
 #[macro_use]
 extern crate slog;
+extern crate bytes;
 extern crate sloggers;
 
+mod body;
 mod crawler;
 mod eos_on_error;
 mod fork;
+mod request;
 mod select_all;
 mod sheduler;
 mod spider;
-mod unique;
-
-use crawler::Crawler;
-use failure::{Error, Fail};
+mod utils;
+use crawler::CrawlerBuilder;
+use failure::Error;
+use futures::future::{err, ok};
+use futures::stream::{iter_ok, once};
 use futures::Future;
 use futures::Stream;
-use futures::future::{err, ok};
-use futures::stream::{empty, iter_ok, iter_result, once};
+use request::Request;
+use reqwest::unstable::async::{Client, Response};
 use reqwest::Method;
-use reqwest::unstable::async::{Client, Request, Response};
 use select::document::Document;
 use select::predicate::{Attr, Class, Name, Predicate};
-use sloggers::Build;
 use sloggers::terminal::{Destination, TerminalLoggerBuilder};
 use sloggers::types::Severity;
+use sloggers::Build;
 use spider::Parse;
 use std::fmt::{self, Display};
-use std::sync::Arc;
-use tendril::StrTendril;
 use url::{ParseError, Url};
 
 #[allow(dead_code)]
@@ -92,7 +95,7 @@ impl spider::Spider for Dummy {
     fn parse(
         &mut self,
         _resp: Response,
-    ) -> Box<Future<Item = spider::ParseStream<Self::Item>, Error = Error>> {
+    ) -> Box<Future<Item = spider::ParseStream<Self::Item>, Error = Error> + Send> {
         let req = "https://google.com"
             .parse()
             .map_err(|e: ParseError| e.into())
@@ -118,13 +121,11 @@ impl fmt::Display for XnxxItem {
 
 pub struct XnxxSpider<'a> {
     client: &'a Client,
-    num_parsed: usize,
 }
 
 impl<'a> XnxxSpider<'a> {
     fn new(client: &'a Client) -> Self {
-        let num_parsed = 0;
-        Self { client, num_parsed }
+        Self { client }
     }
 }
 
@@ -136,12 +137,12 @@ impl<'a> spider::Spider for XnxxSpider<'a> {
     }
 
     fn start(&mut self) -> Box<Future<Item = spider::RequestStream, Error = Error>> {
-        let url: Result<Url, ParseError> = "http://nono123313.com".parse();
+        let url: Result<Url, ParseError> = "http://www.xnxx.com/tags".parse();
         match url {
             Ok(url) => {
                 let req = Request::new(Method::Get, url.clone());
                 let fut = self.client
-                    .execute(req)
+                    .execute(req.into())
                     .map_err(|e| e.into())
                     .and_then(|resp| {
                         let body = resp.into_body();
@@ -152,7 +153,7 @@ impl<'a> spider::Spider for XnxxSpider<'a> {
                         let body = String::from_utf8_lossy(&body);
                         let doc = Document::from(body.as_ref());
                         let mut output = Vec::new();
-                        for tag in doc.find(Attr("id", "tags").descendant(Name("a"))) {
+                        for tag in doc.find(Attr("id", "tags").descendant(Name("a"))).take(1) {
                             let href = tag.attr("href");
                             if let Some(href) = href {
                                 let new = url.join(href)
@@ -172,7 +173,7 @@ impl<'a> spider::Spider for XnxxSpider<'a> {
     fn parse(
         &mut self,
         resp: Response,
-    ) -> Box<Future<Item = spider::ParseStream<Self::Item>, Error = Error>> {
+    ) -> Box<Future<Item = spider::ParseStream<Self::Item>, Error = Error> + Send> {
         let url = resp.url().clone();
 
         let fut = resp.into_body()
@@ -183,20 +184,21 @@ impl<'a> spider::Spider for XnxxSpider<'a> {
                 let body = String::from_utf8_lossy(&body);
                 let doc = Document::from(body.as_ref());
                 let mut requests = Vec::new();
-                let mut items = Vec::new();
-                for tag in doc.find(Class("pagination").descendant(Name("a"))).take(1) {
+                //let mut items = Vec::new();
+                for tag in doc.find(Class("pagination").descendant(Name("a"))) {
                     let href = tag.attr("href");
                     if let Some(href) = href {
                         let new = url.join(href).expect("Wrong url");
-                        let item = XnxxItem { url: new.clone() };
-                        items.push(Ok(spider::Parse::Item(item)));
+                        //let item = XnxxItem { url: new.clone() };
+                        //items.push(Ok(spider::Parse::Item(item)));
                         requests.push(Ok(spider::Parse::Request(Request::new(Method::Get, new))));
                     }
                 }
                 let req_stream = iter_ok(requests.into_iter());
-                let item_stream = iter_ok(items.into_iter());
-                let stream = req_stream.select(item_stream);
-                Box::new(stream) as spider::ParseStream<Self::Item>
+                //let item_stream = iter_ok(items.into_iter());
+                //let stream = req_stream.select(item_stream);
+                //Box::new(stream) as spider::ParseStream<Self::Item>
+                Box::new(req_stream) as spider::ParseStream<Self::Item>
             });
         Box::new(fut)
     }
@@ -210,11 +212,14 @@ fn main() {
     builder.destination(Destination::Stderr);
     let logger = builder.build().unwrap();
 
-    let sheduler = sheduler::GlobalLimitedSheduler::with_logger(&client, 300, logger.clone());
-    let crawler = Crawler::with_logger(sheduler, logger);
+    let sheduler = sheduler::GlobalLimitedSheduler::with_logger(&client, 2, logger.clone());
+    let crawler = CrawlerBuilder::new(sheduler)
+        .with_logger(logger)
+        .build()
+        .unwrap();
     let spider = XnxxSpider::new(&client);
     let crawl = crawler.crawl(spider);
-    let crawl = crawl.for_each(|item| Ok(()));
+    let crawl = crawl.for_each(|_item| Ok(()));
 
     let res = core.run(crawl);
     println!("{:?}", res);

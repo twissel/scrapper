@@ -3,18 +3,23 @@ use ex_futures::stream::StreamExt;
 use failure::Error;
 use futures::stream::FuturesUnordered;
 use futures::{Async, Future, Poll, Stream};
+use futures_cpupool::CpuPool;
 use select_all::SelectAll;
 use sheduler::*;
 use slog::Logger;
 use spider::*;
-use std::fmt::Display;
+use std::cell::RefCell;
+use std::rc::Rc;
+use utils::{filter_and_log_errors, get_digest_and_request, RFPFilter};
 
 pub struct Crawler<SH>
 where
     SH: Sheduler,
 {
-    sheduler: SH,
+    sheduler: Rc<RefCell<SH>>,
     logger: Option<Logger>,
+    pool: CpuPool,
+    parse_settings: ParseSettings,
 }
 
 pub struct Crawl<S, SH>
@@ -22,10 +27,31 @@ where
     S: Spider,
 {
     spider: S,
-    sheduler: SH,
+    sheduler: Rc<RefCell<SH>>,
     parsing: FuturesUnordered<Box<Future<Item = ParseStream<S::Item>, Error = Error>>>,
     output: SelectAll<ItemStream<S::Item>>,
     logger: Option<Logger>,
+    pool: CpuPool,
+    parse_settings: ParseSettings,
+    rfp_filter: RFPFilter,
+}
+
+impl<S, SH> Crawl<S, SH>
+where
+    S: Spider,
+{
+    fn wrap_parse_future(
+        &self,
+        fut: Box<Future<Item = ParseStream<S::Item>, Error = Error> + Send>,
+    ) -> Box<Future<Item = ParseStream<S::Item>, Error = Error> + Send> {
+        match self.parse_settings {
+            ParseSettings::OnPool => {
+                let fut = self.pool.spawn(fut);
+                Box::new(fut)
+            }
+            ParseSettings::SameThread => fut,
+        }
+    }
 }
 
 impl<S, SH> Stream for Crawl<S, SH>
@@ -37,9 +63,13 @@ where
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        if let Async::Ready(Some(resp)) = self.sheduler.poll()? {
-            let parse_fut = self.spider.parse(resp);
-            self.parsing.push(Box::new(parse_fut));
+        {
+            let mut sheduler = self.sheduler.borrow_mut();
+            if let Async::Ready(Some(resp)) = sheduler.poll()? {
+                let parse_fut = self.spider.parse(resp);
+                let parse_fut = self.wrap_parse_future(parse_fut);
+                self.parsing.push(Box::new(parse_fut));
+            }
         }
 
         if let Async::Ready(Some(parsed)) = self.parsing.poll()? {
@@ -53,6 +83,14 @@ where
                 Parse::Request(req) => req,
                 _ => unreachable!("requests stream got item"),
             });
+
+            let pool = self.pool.clone();
+
+            let new_requests = new_requests
+                .map(move |req| pool.spawn_fn(|| Ok(get_digest_and_request(req))))
+                .buffered(4);
+
+            let new_requests = self.rfp_filter.unique(new_requests);
 
             let mut new_items = new_items.map(|item| match item {
                 Parse::Item(item) => item,
@@ -69,7 +107,11 @@ where
                 None => Box::new(new_items) as ItemStream<Self::Item>,
             };
 
-            self.sheduler.shedule(Box::new(new_requests));
+            {
+                let mut sheduler = self.sheduler.borrow_mut();
+                sheduler.shedule(Box::new(new_requests));
+            }
+
             self.output.push(new_items);
         }
 
@@ -77,7 +119,9 @@ where
             return Ok(Async::Ready(Some(item)));
         }
 
-        if self.sheduler.is_done() && self.parsing.is_empty() {
+        let sheduler = self.sheduler.borrow();
+
+        if sheduler.is_done() && self.parsing.is_empty() {
             Ok(Async::Ready(None))
         } else {
             Ok(Async::NotReady)
@@ -85,74 +129,107 @@ where
     }
 }
 
+#[allow(dead_code)]
 impl<SH> Crawler<SH>
 where
     SH: Sheduler,
 {
-    pub fn crawl<S>(self, mut spider: S) -> Crawl<S, SH>
+    pub fn crawl<S>(&self, mut spider: S) -> Crawl<S, SH>
     where
         S: Spider,
     {
+        let pool = self.pool.clone();
+        let cloned_pool = self.pool.clone();
         let start_stream = spider.start().flatten_stream();
-        let start_stream =
-            filter_and_log_errors(start_stream, &self.logger).eos_on_error(&self.logger);
+        let start_stream = filter_and_log_errors(start_stream, &self.logger)
+            .eos_on_error(&self.logger)
+            .map(move |req| cloned_pool.spawn_fn(|| Ok(get_digest_and_request(req))))
+            .buffered(4);
 
-        let start_stream: InternalRequestStream = Box::new(start_stream);
         let parsing = FuturesUnordered::new();
         let output = SelectAll::new();
-        let mut sheduler = self.sheduler;
+        let sheduler = self.sheduler.clone();
         let name = spider.name();
+        let parse_settings = self.parse_settings.clone();
+
         let logger = match self.logger {
             Some(ref logger) => Some(logger.new(o!("Crawler" => name))),
             None => None,
         };
-        sheduler.shedule(start_stream);
+
+        let rfp_filter = RFPFilter::new(pool.clone(), logger.clone());
+        let start_stream: InternalRequestStream = Box::new(rfp_filter.unique(start_stream));
+
+        {
+            let mut borrowed = sheduler.borrow_mut();
+            borrowed.shedule(start_stream);
+        }
+
         Crawl {
             spider,
             sheduler,
             parsing,
             output,
             logger,
+            pool,
+            parse_settings,
+            rfp_filter,
         }
-    }
-
-    pub fn new(sheduler: SH) -> Crawler<SH> {
-        let logger = None;
-        Crawler { sheduler, logger }
-    }
-
-    pub fn with_logger(sheduler: SH, logger: Logger) -> Crawler<SH> {
-        let logger = Some(logger);
-        Crawler { sheduler, logger }
     }
 }
 
-fn filter_and_log_errors<S, T, E, SE>(
-    stream: S,
-    logger: &Option<Logger>,
-) -> Box<Stream<Item = T, Error = SE>>
+pub struct CrawlerBuilder<SH> {
+    sheduler: SH,
+    logger: Option<Logger>,
+    pool: Option<CpuPool>,
+    parse_settings: Option<ParseSettings>,
+}
+
+#[derive(Clone)]
+pub enum ParseSettings {
+    OnPool,
+    SameThread,
+}
+
+impl<SH> CrawlerBuilder<SH>
 where
-    S: Stream<Item = Result<T, E>, Error = SE> + 'static,
-    E: Display,
+    SH: Sheduler,
 {
-    match logger {
-        &Some(ref logger) => {
-            let logger_clone = logger.clone();
-            let stream = stream.filter_map(move |item| match item {
-                Ok(req) => Some(req),
-                Err(e) => {
-                    error!(logger_clone, "error received"; "error" => %e);
-                    None
-                }
-            });
-            Box::new(stream) as Box<Stream<Item = T, Error = SE>>
+    pub fn new(sheduler: SH) -> Self {
+        let logger = None;
+        let pool = None;
+        let parse_settings = None;
+        Self {
+            logger,
+            sheduler,
+            pool,
+            parse_settings,
         }
-        &None => {
-            let stream = stream.filter_map(|item| match item {
-                Ok(req) => Some(req),
-                Err(_) => None,
-            });
-            Box::new(stream)
-        }
+    }
+
+    pub fn with_logger(mut self, logger: Logger) -> Self {
+        self.logger = Some(logger);
+        self
+    }
+
+    pub fn build(self) -> Result<Crawler<SH>, Error> {
+        let logger = self.logger;
+        let sheduler = Rc::new(RefCell::new(self.sheduler));
+        let pool = match self.pool {
+            Some(pool) => pool,
+            None => CpuPool::new_num_cpus(),
+        };
+
+        let parse_settings = match self.parse_settings {
+            Some(settings) => settings,
+            None => ParseSettings::OnPool,
+        };
+
+        Ok(Crawler {
+            logger,
+            sheduler,
+            pool,
+            parse_settings,
+        })
     }
 }

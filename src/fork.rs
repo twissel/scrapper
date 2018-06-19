@@ -1,11 +1,10 @@
-use futures::{Async, Poll, Stream};
-use std::collections::{HashMap, VecDeque};
-use std::collections::hash_map::Entry;
-use std::rc::Rc;
-use std::cell::RefCell;
-use std::hash::Hash;
 use futures::task;
+use futures::{Async, Poll, Stream};
+use std::cell::RefCell;
 use std::cell::{Ref, RefMut};
+use std::collections::{HashMap, VecDeque};
+use std::hash::Hash;
+use std::rc::Rc;
 
 #[derive(Clone, Eq, PartialEq, Hash)]
 pub struct Route<R>(pub R);
@@ -106,10 +105,6 @@ where
         self.0.get_mut(route)
     }
 
-    fn get_queque_entry(&mut self, route: Route<R>) -> Entry<Route<R>, ProngQueque<S>> {
-        self.0.entry(route)
-    }
-
     fn contains_queque(&self, route: &Route<R>) -> bool {
         self.0.contains_key(route)
     }
@@ -152,6 +147,7 @@ enum State {
     WithProngs,
 }
 
+#[allow(dead_code)]
 pub struct Fork<S, F, R>
 where
     S: Stream,
@@ -162,6 +158,7 @@ where
     shared: Rc<RefCell<Shared<S, F, R>>>,
 }
 
+#[allow(dead_code)]
 impl<S, F, R> Fork<S, F, R>
 where
     S: Stream,
@@ -228,6 +225,7 @@ where
     }
 }
 
+#[allow(dead_code)]
 pub fn fork<S, F, R>(stream: S, router: F) -> Fork<S, F, R>
 where
     S: Stream,
